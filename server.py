@@ -1,5 +1,5 @@
 """Bounded YouTube clip service; browser handles captioning and GIF encoding."""
-import json, math, os, re, signal, subprocess, sys, tempfile, threading, time
+import html, urllib.request, urllib.parse, json, math, os, re, signal, subprocess, sys, tempfile, threading, time
 from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -8,6 +8,8 @@ ORIGIN = os.environ.get('SITE_ORIGIN', 'https://gif-israeli.kokofoko.chatgpt.sit
 SLOTS = threading.BoundedSemaphore(2)
 REQUESTS = defaultdict(deque)
 LOCK = threading.Lock()
+TENOR_CACHE = {}
+SEARCH_CACHE = {}
 
 
 def validate(data):
@@ -69,6 +71,54 @@ def make_clip(video_id, start, end):
         return target.read_bytes()
 
 
+class SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlsplit(newurl)
+        if parsed.scheme != 'https' or parsed.hostname not in ('tenor.com','media.tenor.com'):
+            raise ValueError('Unsupported redirect')
+        return super().redirect_request(req,fp,code,msg,headers,newurl)
+
+
+def tenor_fetch(url, limit):
+    parsed=urllib.parse.urlsplit(url)
+    if parsed.scheme!='https' or parsed.hostname not in ('tenor.com','media.tenor.com'):
+        raise ValueError('Unsupported source')
+    request=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+    with urllib.request.build_opener(SafeRedirect).open(request,timeout=20) as response:
+        body=response.read(limit+1)
+        if len(body)>limit:raise ValueError('הקובץ גדול מדי לייבוא.')
+        return body
+
+
+def tenor_search(query):
+    if not query or len(query)>80:raise ValueError('כתוב חיפוש של עד 80 תווים.')
+    now=time.monotonic()
+    with LOCK:
+        for cache in (TENOR_CACHE,SEARCH_CACHE):
+            for key in list(cache):
+                if cache[key][0]<now:del cache[key]
+        cached=SEARCH_CACHE.get(query)
+        if cached:return cached[1]
+        if len(SEARCH_CACHE)>100:SEARCH_CACHE.clear()
+    page=tenor_fetch('https://tenor.com/search/'+urllib.parse.quote(query.replace(' ','-'))+'-gifs',2000000).decode()
+    match=re.search(r'<script[^>]+id="store-cache"[^>]*>(.*?)</script>',page,re.S)
+    if not match:raise RuntimeError('מקור החיפוש אינו זמין כרגע. נסה שוב מאוחר יותר.')
+    cache=json.loads(match.group(1));results=[]
+    for group in cache.get('universal',{}).get('search',{}).values():
+        for item in group.get('results',[]):
+            legacy=str(item.get('legacy_info',{}).get('post_id',''))
+            media=item.get('media_formats',{}).get('mediumgif') or item.get('media_formats',{}).get('tinygif')
+            if not legacy.isdigit() or not media or media.get('size',0)>5*1024*1024:continue
+            name=html.unescape(item.get('h1_title') or item.get('title') or query).replace(' GIF','')[:100]
+            result={'id':legacy,'name':name,'url':media['url'],'source':item.get('itemurl') or 'https://tenor.com/view/x-gif-'+legacy,'tags':' '.join(item.get('tags',[]))[:500]}
+            with LOCK:TENOR_CACHE[legacy]=(now+900,result)
+            results.append(result)
+            if len(results)>=18:break
+        if results:break
+    with LOCK:SEARCH_CACHE[query]=(now+180,results)
+    return results
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -88,7 +138,23 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        self.reply(200, {'status':'ok'}) if self.path == '/health' else self.reply(404, {'error':'Not found'})
+        route=urllib.parse.urlsplit(self.path);params=urllib.parse.parse_qs(route.query)
+        if route.path=='/health':self.reply(200,{'status':'ok','features':['tenor-search','tenor-import']});return
+        if route.path not in ('/search','/gif'):self.reply(404,{'error':'Not found'});return
+        if self.headers.get('Origin')!=ORIGIN:self.reply(403,{'error':'Origin denied'});return
+        if not SLOTS.acquire(blocking=False):self.reply(503,{'error':'החיפוש עסוק. נסה שוב בעוד רגע.'});return
+        try:
+            if route.path=='/search':self.reply(200,{'results':tenor_search(params.get('q',[''])[0].strip())})
+            else:
+                key=params.get('id',[''])[0]
+                with LOCK:cached=TENOR_CACHE.get(key)
+                if not cached or cached[0]<time.monotonic():raise ValueError('תוצאת החיפוש פגה. חפש שוב.')
+                body=tenor_fetch(cached[1]['url'],5*1024*1024)
+                if body[:6] not in (b'GIF87a',b'GIF89a'):raise ValueError('המקור לא החזיר קובץ GIF תקין.')
+                self.reply(200,body,'image/gif')
+        except ValueError as e:self.reply(400,{'error':str(e)})
+        except Exception:self.reply(502,{'error':'לא ניתן להגיע ל־Tenor כרגע. נסה שוב.'})
+        finally:SLOTS.release()
 
     def do_OPTIONS(self):
         if self.headers.get('Origin') != ORIGIN:
