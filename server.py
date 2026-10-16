@@ -32,6 +32,9 @@ def run(args, timeout):
             proc.wait()
             raise RuntimeError('עיבוד הסרטון ארך יותר מדי זמן. נסה שוב או בחר סרטון אחר.')
         if code:
+            log.seek(0); detail=log.read().decode(errors='replace')
+            category = 'youtube_signin_required' if ('Sign in' in detail or 'not a bot' in detail) else 'upstream_forbidden' if '403' in detail else 'media_unavailable'
+            print(json.dumps({'event':'processor_failure','category':category,'exit_code':code,'detail':re.sub(r'https?://\S+', '[URL]', detail)[-1800:]}),flush=True)
             # Upstream errors can contain signed media URLs. Never return logs to clients.
             raise RuntimeError('לא ניתן לשלוף את הסרטון מ־YouTube. ייתכן שהוא מוגבל או שהשליפה נחסמה.')
 
