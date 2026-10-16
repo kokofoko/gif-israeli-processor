@@ -7,10 +7,12 @@ Build this directory as a Docker service with outbound HTTPS and at least 512 MB
 
 Two concurrent jobs; five requests per minute per direct peer IP; bounded duration, file size, subprocess timeout, temporary directory cleanup, exact CORS origin. Behind a reverse proxy, configure edge IP rate limiting too (the service deliberately does not trust caller-controlled forwarding headers). Keep only one instance unless a shared rate limiter is added. Container resource/disk limits must be set by the host.
 
-Deployment remains pending. No service URL has been provisioned and no successful live YouTube extraction has yet been verified. Do not enable the UI until the live clip endpoint passes a real extraction test.
+Service deployed on Render: https://gif-israeli-processor.onrender.com (free, Frankfurt). Health check passed. The first live YouTube extraction returned HTTP 502; no successful live YouTube extraction has yet been verified. Do not enable the UI until the live clip endpoint passes a real extraction test.
 
 After the live endpoint passes verification, configure the frontend head with:
 `<meta name="youtube-clip-endpoint" content="https://PROCESSOR-HOST/clip">`.
 The editor downloads the marked clip, feeds it into the existing local caption/GIF encoder, and preserves the synchronous Web Share file flow. No endpoint is configured until deployment is complete.
 
 Local extraction test on 2026-10-16: metadata for `jNQXAC9IVRw` succeeded, but media download failed with `Invalid data found when processing input` in FFmpeg. This is not a successful end-to-end YouTube test. Browser QA remains pending.
+
+Production diagnostic (2026-10-16): YouTube rejected Render egress with `Sign in to confirm you are not a bot`. Both metadata/clip calls through the processor fail without a suitable authorized source access path. Health and FFmpeg encoding work, but this is NOT a working YouTube-to-GIF deployment. Frontend endpoint remains disabled. Do not ask users to paste session cookies into chat.
