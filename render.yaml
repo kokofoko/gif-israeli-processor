@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: gif-israeli-processor
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: SITE_ORIGIN
+        value: https://gif-israeli.kokofoko.chatgpt.site
