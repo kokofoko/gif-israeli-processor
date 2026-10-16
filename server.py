@@ -74,14 +74,14 @@ def make_clip(video_id, start, end):
 class SafeRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         parsed = urllib.parse.urlsplit(newurl)
-        if parsed.scheme != 'https' or parsed.hostname not in ('tenor.com','media.tenor.com'):
+        if parsed.scheme != 'https' or not (parsed.hostname=='tenor.com' or re.fullmatch(r'media[0-9]*\.tenor\.com',parsed.hostname or '')):
             raise ValueError('Unsupported redirect')
         return super().redirect_request(req,fp,code,msg,headers,newurl)
 
 
 def tenor_fetch(url, limit):
     parsed=urllib.parse.urlsplit(url)
-    if parsed.scheme!='https' or parsed.hostname not in ('tenor.com','media.tenor.com'):
+    if parsed.scheme!='https' or not (parsed.hostname=='tenor.com' or re.fullmatch(r'media[0-9]*\.tenor\.com',parsed.hostname or '')):
         raise ValueError('Unsupported source')
     request=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
     with urllib.request.build_opener(SafeRedirect).open(request,timeout=20) as response:
